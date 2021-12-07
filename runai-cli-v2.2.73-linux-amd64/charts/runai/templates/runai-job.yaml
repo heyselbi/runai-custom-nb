@@ -1,0 +1,204 @@
+{{- include "runai-common.pvc" . }}
+
+---
+{{- if .Values.isRunaiJob }}
+apiVersion: run.ai/v1
+kind: "RunaiJob"
+{{- else if .Values.inference }}
+apiVersion: apps/v1
+kind: "Deployment"
+{{- else }}
+apiVersion: batch/v1
+kind: "Job"
+{{- end }}
+
+{{- $combinedVolume := list }}
+{{- range $volume := (.Values.volume | default list) }}
+{{- $combinedVolume = append $combinedVolume $volume }}
+{{- end}}
+{{- range $volume := (.Values.volumeDefault | default list) }}
+{{- $combinedVolume = append $combinedVolume $volume }}
+{{- end}}
+
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+  {{- include "runai-common.charts.label-addition" . | indent 4 }}
+    {{- if and .Values.interactive .Values.isPreemptible }}
+    priorityClassName: "interactive-preemptible"
+    {{- else if .Values.interactive }}
+    priorityClassName: "build"
+    {{- end }}
+
+  {{- if .Values.labels }}
+    {{- range $key, $val := .Values.labels }}
+    {{ $key }}: {{ $val | quote }}
+    {{- end }}
+  {{- end}}
+  annotations:
+    runai-cli-command: {{ .Values.cliCommand | quote }}
+    {{- if .Values.user }}
+    user: {{ .Values.user | quote}}
+    {{- end }}
+spec:
+    {{- if or .Values.ttlSecondsAfterFinished (eq (quote .Values.ttlSecondsAfterFinished) (quote 0))}}
+  ttlSecondsAfterFinished: {{ .Values.ttlSecondsAfterFinished }}
+    {{- end }}
+    {{- if .Values.parallelism }}
+  parallelism: {{ .Values.parallelism }}
+    {{- end }}
+    {{- if .Values.completions }}
+  completions: {{ .Values.completions }}
+    {{- end }}
+    {{- /* need to test specifically for non-null values. 0 values is ok too */ -}}
+    {{- if not (kindIs "invalid" .Values.backoffLimit) }}
+  backoffLimit: {{ .Values.backoffLimit }}
+    {{- end }}
+  {{- if .Values.inference }}
+  selector:
+    matchLabels:
+      release: {{ .Release.Name }}
+  {{- if .Values.replicas }}
+  replicas: {{ .Values.replicas }}
+  {{- end }}
+  {{- end }}
+  template:
+    metadata:
+      annotations:
+        {{- if .Values.gpuFraction }}
+        gpu-fraction: "{{ .Values.gpuFraction }}"
+        {{- end }}
+        {{- if .Values.gpuMemory }}
+        gpu-memory: "{{ .Values.gpuMemory }}"
+        {{- end }}
+        {{- if .Values.migProfile }}
+        {{ .Values.migProfile }}: "1"
+        {{- end }}
+        {{- if .Values.elastic }}
+        elastic: {{ .Values.elastic | quote }}
+        {{- end }}
+        {{- if .Values.user }}
+        user: {{ .Values.user | quote}}
+        {{- end }}
+        {{- if .Values.isMps }}
+        mps: {{ .Values.isMps | quote}}
+        {{- end }}
+      labels:
+        {{- include "runai-common.charts.label-addition" . | indent 8}}
+    spec:
+      {{- if .Values.node_type }}
+      nodeSelector:
+        run.ai/type: {{ .Values.node_type }}
+      {{- end}}
+      schedulerName: runai-scheduler
+      {{- if not .Values.inference }}
+      restartPolicy: Never
+      {{- end }}
+      hostIPC: {{ .Values.hostIPC }}
+      hostNetwork: {{ .Values.hostNetwork }}
+      securityContext:
+        {{- if .Values.runAsUser }}
+        runAsUser: {{ .Values.runAsUser }}
+        {{- end}}
+        {{- if .Values.runAsGroup }}
+        runAsGroup: {{ .Values.runAsGroup }}
+        {{- end }}
+        {{- if .Values.supplementalGroups }}
+        supplementalGroups:
+{{ toYaml .Values.supplementalGroups | indent 10}}
+        {{- end }}
+      {{- if .Values.gitSync.sync }}
+      initContainers:
+        - name: git-sync
+          image: {{ .Values.gitSync.image }}
+          env:
+            - name: GIT_SYNC_REPO
+              value: {{ .Values.gitSync.repository }}
+            {{- if .Values.gitSync.byRevision }}
+            - name: GIT_SYNC_REV
+              value: {{ .Values.gitSync.revision }}
+            {{- else }}
+            - name: GIT_SYNC_BRANCH
+              value: {{ .Values.gitSync.branch }}
+            {{- end }}
+            - name: GIT_SYNC_ROOT
+              value: /code
+            - name: GIT_SYNC_ONE_TIME
+              value: "true"
+            {{- if .Values.gitSync.useCredentials }}
+            - name: GIT_SYNC_USERNAME
+              value: {{ .Values.gitSync.username }}
+            - name: GIT_SYNC_PASSWORD
+              value: {{ .Values.gitSync.password }}
+            {{- end }}
+          volumeMounts:
+            - name: code-sync
+              mountPath: /code
+      {{- end }}
+      containers:
+        - name: {{ .Release.Name }}
+          command:
+          {{ range $index, $command := .Values.command }}
+          - {{ quote $command }}
+          {{- end}}
+          {{- if .Values.args}}
+          args: 
+          {{ range $index, $arg := .Values.args }}
+          - {{ quote $arg }}
+          {{- end}}
+          {{- end}}
+          stdin: {{ .Values.stdin }}
+          tty: {{ .Values.tty }}
+          image: {{ .Values.image }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          {{- if .Values.workingDir }}
+          workingDir: {{ .Values.workingDir }}
+          {{- end}}
+          securityContext:
+            allowPrivilegeEscalation: {{ not .Values.preventPrivilegeEscalation }}
+          resources:
+            limits:
+              {{- if .Values.gpuInt }}
+              nvidia.com/gpu: {{ .Values.gpuInt }}
+              {{- end}}
+              {{- if .Values.cpuLimit}}
+              cpu: {{ .Values.cpuLimit }}
+              {{- end}}
+              {{- if .Values.memoryLimit}}
+              memory: {{ .Values.memoryLimit }}
+              {{- end }}
+            requests:
+              {{- if .Values.cpu}}
+              cpu: {{ .Values.cpu }}
+              {{- end}}
+              {{- if .Values.memory}}
+              memory: {{ .Values.memory }}
+              {{- end }}
+          env:
+            {{- if .Values.createHomeDir }}
+            - name: "HOME"
+              value: /home/runai-home
+            {{- end }}
+            # Not using concat to support previous version of helm
+            {{- range $index, $env := .Values.environmentDefault }}
+            {{ $parts := split "=" $env }}
+            - name: {{ quote $parts._0 }}
+              value: {{ quote $parts._1}}
+            {{- end }}
+            {{- range $index, $env := .Values.environment }}
+            {{ $envparts := split "=" $env }}
+            - name: {{ quote $envparts._0 }}
+              {{ $envsecretparts := split ":" $envparts._1 }}
+              {{- if eq $envsecretparts._0 "SECRET" }}
+              {{ $envsecretdataparts := split "," $envsecretparts._1 }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ quote $envsecretdataparts._0 }}
+                  key: {{ quote $envsecretdataparts._1 }}
+              {{ else }}
+              value: {{ quote $envparts._1 }}
+              {{- end }}
+            {{- end }}
+          {{- include "runai-common.job.ports" . | indent 10 }}
+          {{- include "runai-common.job.volume.mounts" . | indent 10 }}
+        {{- include "runai-common.job.volumes" . | indent 6 }}
