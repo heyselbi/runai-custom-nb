@@ -6,7 +6,7 @@ USER root
 RUN yum -y install kubectl
 
 # Install helm
-COPY helm-v3.7.1-linux-amd64/linux-amd64/helm /usr/local/bin
+COPY helm-v3.11.1-linux-amd64/linux-amd64/helm /usr/local/bin
 
 # Install runai-cli
 RUN mkdir -p /tmp/runai
