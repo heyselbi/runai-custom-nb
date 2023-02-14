@@ -1,0 +1,22 @@
+kind: ImageStream
+apiVersion: image.openshift.io/v1
+metadata:
+  name: runai-notebook
+  labels:
+    opendatahub.io/notebook-image: 'true'
+  annotations:
+    opendatahub.io/notebook-image-name: "Run:AI Notebook"
+    opendatahub.io/notebook-image-desc: "Custom Jupyter notebook image with Run:AI CLI, helm charts and kubectl"
+spec:
+  lookupPolicy:
+    local: true
+  tags:
+    - annotations:
+        openshift.io/imported-from: quay.io/selbi/runai-custom-nb
+      name: stable
+      from:
+        kind: DockerImage
+        name: quay.io/selbi/runai-custom-nb:v2.0
+      name: "v2.0"
+      referencePolicy:
+        type: Source
